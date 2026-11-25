@@ -1,0 +1,14 @@
+{
+  "name": "cicdpractice-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Express REST API backed by PostgreSQL",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
