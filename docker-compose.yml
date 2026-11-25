@@ -2,13 +2,17 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: cicdpractice
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: app_dev_password
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in your .env file}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in your .env file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d cicdpractice"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:?Set POSTGRES_USER in your .env file} -d ${POSTGRES_DB:?Set POSTGRES_DB in your .env file}",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -21,9 +25,9 @@ services:
       PORT: 5000
       DB_HOST: db
       DB_PORT: 5432
-      DB_NAME: cicdpractice
-      DB_USER: app
-      DB_PASSWORD: app_dev_password
+      DB_NAME: ${POSTGRES_DB:?Set POSTGRES_DB in your .env file}
+      DB_USER: ${POSTGRES_USER:?Set POSTGRES_USER in your .env file}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env file}
     depends_on:
       db:
         condition: service_healthy
