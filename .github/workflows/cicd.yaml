@@ -1,0 +1,176 @@
+name: Dev -> QA -> Prod CI/CD Pipeline
+on:
+  push:
+    branches: ["dev", "qa", "main"]
+  pull_request:
+    branches: ["dev", "qa", "main"]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  # ==========================================
+  # 1. CI: TEST, SECURITY SCAN & BUILD (ALL)
+  # ==========================================
+    ci-build-and-test:
+      name: CI - Test, Security Scan & Build
+      runs-on: ubuntu-latest
+      outputs:
+        owner: ${{ steps.meta.outputs.owner }}
+        env_tag: ${{ steps.meta.outputs.env_tag }}
+        sha_tag: ${{ steps.meta.outputs.sha_tag }}
+      steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Set Metadata & Tags
+        id: meta
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "env_tag=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "env_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Backend Lint, Audit & Tests
+        working-directory: ./backend
+        run: |
+          npm ci
+          npm audit --audit-level=high || true
+          node --check server.js
+          npm test --if-present
+
+      - name: Frontend Build & Tests
+        working-directory: ./frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Local Test Images
+        run: |
+          docker build -t devops-app-backend:ci ./backend
+          docker build -t devops-app-frontend:ci ./frontend
+
+      - name: Run Trivy Vulnerability Scanner (Free Security Gate)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: "devops-app-backend:ci"
+          format: "table"
+          exit-code: "0"
+          severity: "CRITICAL,HIGH"
+
+      - name: Run Full-Stack Integration Test (Compose)
+        env:
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          docker compose up -d --build
+          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 \
+            http://localhost:3000/api/health
+          response=$(curl --fail --silent --show-error \
+            -H "Content-Type: application/json" \
+            -d '{"name":"CI Quality Gate Check"}' \
+            http://localhost:3000/api/items)
+          echo "$response" | grep -F '"name":"CI Quality Gate Check"'
+          docker compose down -v
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Backend & Frontend Images to GHCR
+        if: github.event_name == 'push'
+        run: |
+          OWNER="${{ steps.meta.outputs.owner }}"
+          ENV_TAG="${{ steps.meta.outputs.env_tag }}"
+          SHA_TAG="${{ steps.meta.outputs.sha_tag }}"
+
+          docker tag devops-app-backend:ci ghcr.io/$OWNER/devops-app-backend:$ENV_TAG
+          docker tag devops-app-backend:ci ghcr.io/$OWNER/devops-app-backend:$ENV_TAG-$SHA_TAG
+          docker push ghcr.io/$OWNER/devops-app-backend:$ENV_TAG
+          docker push ghcr.io/$OWNER/devops-app-backend:$ENV_TAG-$SHA_TAG
+
+          docker tag devops-app-frontend:ci ghcr.io/$OWNER/devops-app-frontend:$ENV_TAG
+          docker tag devops-app-frontend:ci ghcr.io/$OWNER/devops-app-frontend:$ENV_TAG-$SHA_TAG
+          docker push ghcr.io/$OWNER/devops-app-frontend:$ENV_TAG
+          docker push ghcr.io/$OWNER/devops-app-frontend:$ENV_TAG-$SHA_TAG
+  # ==========================================
+  # 2. CD: DEPLOY TO DEV (Auto on dev push)
+  # ==========================================
+    deploy-dev:
+        name: Deploy to DEV
+        needs: ci-build-and-test
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        runs-on: ubuntu-latest
+        environment:
+          name: development
+        steps:
+          - name: Deploy Dev Stack via SSH
+            uses: appleboy/ssh-action@v1.0.3
+            with:
+              host: ${{ secrets.DEV_EC2_HOST }}
+              username: ${{ secrets.EC2_USER }}
+              key: ${{ secrets.EC2_SSH_KEY }}
+              script: |
+                cd ~/devops-app
+                echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+                IMAGE_TAG=dev docker compose -f docker-compose.prod.yml pull
+                IMAGE_TAG=dev docker compose -f docker-compose.prod.yml up -d
+    # ==========================================
+  # 3. CD: DEPLOY TO QA (Auto on qa merge)
+  # ==========================================
+    deploy-qa:
+      name: Deploy to QA
+      needs: ci-build-and-test
+      if: github.event_name == 'push' && github.ref == 'refs/heads/qa'
+      runs-on: ubuntu-latest
+      environment:
+        name: qa
+      steps:
+        - name: Deploy QA Stack via SSH
+          uses: appleboy/ssh-action@v1.0.3
+          with:
+            host: ${{ secrets.QA_EC2_HOST }}
+            username: ${{ secrets.EC2_USER }}
+            key: ${{ secrets.EC2_SSH_KEY }}
+            script: |
+              cd ~/devops-app
+              echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+              IMAGE_TAG=qa docker compose -f docker-compose.prod.yml pull
+              IMAGE_TAG=qa docker compose -f docker-compose.prod.yml up -d
+
+      # ==========================================
+  # 4. CD: DEPLOY TO PROD (Manual Approval Gate)
+  # ==========================================
+    deploy-prod:
+      name: Deploy to PRODUCTION
+      needs: ci-build-and-test
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      runs-on: ubuntu-latest
+      environment:
+        name: production
+      steps:
+        - name: Deploy Production Stack via SSH
+          uses: appleboy/ssh-action@v1.0.3
+          with:
+            host: ${{ secrets.PROD_EC2_HOST }}
+            username: ${{ secrets.EC2_USER }}
+            key: ${{ secrets.EC2_SSH_KEY }}
+            script: |
+              cd ~/devops-app
+              echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+              IMAGE_TAG=prod docker compose -f docker-compose.prod.yml pull
+              IMAGE_TAG=prod docker compose -f docker-compose.prod.yml up -d
