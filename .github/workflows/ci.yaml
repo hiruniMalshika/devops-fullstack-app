@@ -65,13 +65,8 @@ jobs:
           context: ./backend
           push: true
           tags: |
-<<<<<<< Updated upstream
-            ghcr.io/${{ steps.owner.outputs.owner }}/devops-app-backend:latest
-            ghcr.io/${{ steps.owner.outputs.owner }}/devops-app-backend:${{ github.sha }}
-=======
             ghcr.io/${{ steps.meta.owner.outputs.owner }}/devops-app-backend:${{ steps.meta.outputs.env_tag }}
             ghcr.io/${{ steps.meta.owner.outputs.owner }}/devops-app-backend:${{ steps.meta.outputs.env_tag }}-${{ github.sha }}
->>>>>>> Stashed changes
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -131,13 +126,8 @@ jobs:
           context: ./frontend
           push: true
           tags: |
-<<<<<<< Updated upstream
-            ghcr.io/${{ steps.owner.outputs.owner }}/devops-app-frontend:latest
-            ghcr.io/${{ steps.owner.outputs.owner }}/devops-app-frontend:${{ github.sha }}
-=======
             ghcr.io/${{ steps.meta.owner.outputs.owner }}/devops-app-frontend:${{ steps.meta.outputs.env_tag }}
             ghcr.io/${{ steps.meta.owner.outputs.owner }}/devops-app-frontend:${{ steps.meta.outputs.env_tag }}-${{ github.sha }}
->>>>>>> Stashed changes
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
