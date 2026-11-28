@@ -74,14 +74,23 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           docker compose up -d --build
-          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 \
+          curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 2 \
             http://localhost:3000/api/health
           response=$(curl --fail --silent --show-error \
             -H "Content-Type: application/json" \
             -d '{"name":"CI Quality Gate Check"}' \
             http://localhost:3000/api/items)
           echo "$response" | grep -F '"name":"CI Quality Gate Check"'
-          docker compose down -v
+
+      - name: Show Compose Logs on Failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs db backend frontend
+
+      - name: Stop Compose Stack
+        if: always()
+        run: docker compose down -v
 
       - name: Log in to GHCR
         if: github.event_name == 'push'
